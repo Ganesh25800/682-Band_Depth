@@ -1,0 +1,406 @@
+================================================================================
+  BAND DEPTH ANALYSIS — AIR QUALITY
+  Complete Project Documentation
+  Student  : Ganesh Reddy Chinthalacheruvu
+  Professor: Jun Suzuki
+  Course   : CS682
+================================================================================
+
+
+--------------------------------------------------------------------------------
+  PROJECT OVERVIEW
+--------------------------------------------------------------------------------
+
+This project applies Modified Band Depth (MBD2) to EPA air quality time-series
+data for Boston, MA. The goal is to find the most central (median) curve among
+multiple curves using the band depth method introduced by Lopez-Pintado & Romo.
+
+Five analysis steps are completed:
+  Step 1a - Hourly O3 curves for summer weekdays 2025
+  Step 1b - Hourly NO2 curves for summer weekdays 2025
+  Step 2a - Yearly daily max O3 curves for 2015 to 2024
+  Step 2b - Yearly daily mean PM2.5 curves for 2015 to 2024
+  Step 3a - Parametric NO2 vs O3 curves for summer weekdays 2025
+
+
+--------------------------------------------------------------------------------
+  WHAT IS BAND DEPTH
+--------------------------------------------------------------------------------
+
+Band depth measures how central a curve is among all other curves in a dataset.
+
+For every pair of curves (A, B), a band is formed:
+  bottom of band = min(A(t), B(t)) at each time point t
+  top of band    = max(A(t), B(t)) at each time point t
+
+For every other curve X, we measure what proportion of time it stays inside
+that band. This proportion is averaged across all possible pairs.
+
+The curve with the highest average score is the MEDIAN CURVE — the most
+central and most representative curve in the dataset.
+
+Score ranges from 0 to 1:
+  Score close to 1 = very central = typical pattern
+  Score close to 0 = very outlying = unusual pattern
+
+
+--------------------------------------------------------------------------------
+  FILE: Main.py
+--------------------------------------------------------------------------------
+
+Entry point of the entire project.
+
+What it does:
+  1. Changes working directory to the script location so paths always work
+  2. Calls checkAndExtract() from fileManager.py to ensure all data files exist
+  3. If files are ready, runs all 5 pipelines in sequence
+  4. Tracks and prints total execution time
+
+Functions:
+  run_pipeline(filePath, pollutant, unit, tag, mode)
+    - Runs phases 1 through 7 for hourly and yearly data
+    - Parameters:
+        filePath  = path to CSV file or folder
+        pollutant = name of pollutant e.g. "O3" or "NO2"
+        unit      = unit of measurement e.g. "ppm" or "ug/m3"
+        tag       = output file name prefix
+        mode      = "step1" for hourly, "step2a" for yearly O3,
+                    "step2b" for yearly PM2.5
+
+  run_pipeline_step3(filePath_o3, filePath_no2, tag)
+    - Runs the parametric pipeline for Step 3a
+    - Loads both O3 and NO2 files
+    - Builds parametric curves (NO2 vs O3)
+
+
+--------------------------------------------------------------------------------
+  FILE: fileManager.py
+--------------------------------------------------------------------------------
+
+Manages data files before the pipeline starts.
+
+Constants:
+  JSON_FILE      = "RawCSVData/setup.json" - tracks if first run is done
+  SINGLE_FILES   = dictionary mapping CSV paths to zip paths for hourly files
+  YEARLY_FOLDERS = dictionary mapping folder paths for yearly zip files
+
+Functions:
+  loadJson()
+    - Reads setup.json to check if extraction has been done before
+    - Returns True if first_time_done is True, False otherwise
+    - Returns False if JSON file does not exist yet
+
+  updateJson()
+    - Writes {"first_time_done": true} to setup.json
+    - Called after successful extraction so next run skips extraction
+
+  checkFiles()
+    - Checks if all required CSV files are present
+    - For single files: checks if file exists at expected path
+    - For yearly folders: checks if at least one CSV file exists in folder
+    - Returns True if all files present, False if any are missing
+
+  extractFiles()
+    - Extracts all zip files to correct locations
+    - For hourly files: extracts CSV directly to RawCSVData/ folder
+    - For yearly files: loops through each zip in folder and extracts CSV
+    - Uses os.path.basename to strip any subfolder from zip to avoid
+      wrong path issues
+    - Skips files that already exist
+    - Returns True on success, False if any zip file is missing
+
+  checkAndExtract()
+    - Main function called from Main.py
+    - Flow:
+        1. Calls loadJson() to check first_time_done flag
+        2. If True: calls checkFiles() - if all present return True
+        3. If False or files missing: calls extractFiles()
+        4. After extraction: calls checkFiles() to verify
+        5. If verified: calls updateJson() and returns True
+        6. If still missing: returns False and pipeline does not start
+
+
+--------------------------------------------------------------------------------
+  FILE: dataHandling.py
+--------------------------------------------------------------------------------
+
+Handles loading, cleaning, filtering and validation of raw EPA data.
+
+Constants:
+  TARGET_STATE  = "25"         (Massachusetts)
+  TARGET_COUNTY = "025"        (Suffolk County, Boston)
+  DATE_START    = "2025-06-01" (summer start)
+  DATE_END      = "2025-08-31" (summer end)
+  WEEKDAYS      = [0,1,2,3,4]  (Monday to Friday)
+  YEAR_START    = 2015
+  YEAR_END      = 2024
+
+Functions:
+
+  load_Raw_Data(filePath, mode)
+    - PHASE 1
+    - mode "step1" or "step3": loads a single CSV file
+    - mode "step2a" or "step2b": loads all CSV files from a folder and
+      combines them into one DataFrame using pandas concat
+    - All data loaded as strings (dtype=str) to prevent county code "025"
+      being read as integer 25
+    - Returns raw DataFrame
+
+  cleanRawData(raw_Data, mode)
+    - PHASE 2
+    - Steps 1-3 are the same for all modes:
+        Step 1: Normalize column names (lowercase, underscores)
+        Step 2: Filter to Boston (state_code=25, county_code=025)
+        Step 3: Parse date_local column to datetime
+    - Steps 4-10 differ by mode:
+
+    mode "step1" or "step3" (hourly data):
+        Step 4: Filter dates to June-August 2025
+        Step 5: Filter to weekdays Monday-Friday only
+        Step 6: Extract hour number from time_local column
+        Step 7: Convert sample_measurement to numeric
+        Step 8: Remove negative values
+        Step 9: Keep only date, hour, value columns
+        Step 10: Average across multiple monitoring sites per date+hour
+
+    mode "step2a" (yearly O3):
+        Step 4: Filter years 2015 to 2024
+        Step 5: Filter sample_duration containing "8-HR RUN"
+        Step 6: Convert 1st_max_value to numeric (daily max O3)
+        Step 7: Remove negative values
+        Step 8: Add year and day_of_year columns
+        Step 9: Keep date, year, day_of_year, value columns
+        Step 10: Average across multiple sites per year+day_of_year
+
+    mode "step2b" (yearly PM2.5):
+        Step 4: Filter years 2015 to 2024
+        Step 5: Filter sample_duration = "24 HOUR"
+        Step 6: Convert arithmetic_mean to numeric (daily mean PM2.5)
+        Steps 7-10: Same as step2a
+
+  dateValidation(cleaned_data, mode)
+    - PHASE 3
+    - mode "step1" or "step3":
+        Groups by date and counts unique hours
+        Keeps only days that have all 24 hours present
+        Drops incomplete days
+    - mode "step2a" or "step2b":
+        Groups by year and counts unique day_of_year values
+        Keeps only years that have at least 100 days of data
+        Drops incomplete years
+    - Returns validated DataFrame
+
+  cleanStep3Data(filePath_o3, filePath_no2)
+    - PHASE 2 for Step 3a only
+    - Loads both O3 and NO2 hourly files
+    - Runs clean_single() on each file which applies same hourly cleaning
+      as mode "step1"
+    - Merges both cleaned DataFrames on date + hour (inner join)
+    - Renames value columns to "o3" and "no2"
+    - Returns merged DataFrame with columns: date, hour, o3, no2
+
+
+--------------------------------------------------------------------------------
+  FILE: curveMatrix.py
+--------------------------------------------------------------------------------
+
+Converts validated DataFrame into numpy 2D matrix for band depth computation.
+
+Functions:
+
+  curveMatrix(validate_date, mode)
+    - PHASE 4
+    - mode "step1" or "step3":
+        Groups data by date
+        For each date extracts 24 hourly values sorted by hour
+        Builds matrix of shape (n_days, 24)
+        Each row = one day = one curve
+        Validates shape must be (n, 24)
+    - mode "step2a" or "step2b":
+        Groups data by year
+        For each year extracts values sorted by day_of_year
+        If year has fewer than 365 days:
+          Uses pandas reindex to create all 365 slots
+          Uses linear interpolation to fill gaps between real measurements
+          Uses bfill and ffill to fill any remaining edge gaps
+        Trims to exactly 365 values if more than 365 exist
+        Builds matrix of shape (n_years, 365)
+        Each row = one year = one curve
+    - Replaces any NaN values with row mean for both modes
+    - Returns X (numpy array) and dates (list of labels)
+
+  curveMatrixStep3(merged_data)
+    - PHASE 4 for Step 3a only
+    - Groups merged data by date
+    - For each date extracts 24 hourly NO2 values into X_no2
+    - For each date extracts 24 hourly O3 values into X_o3
+    - Both matrices have shape (n_days, 24)
+    - Returns X_no2, X_o3, dates
+
+
+--------------------------------------------------------------------------------
+  FILE: curveScoring.py
+--------------------------------------------------------------------------------
+
+Computes Modified Band Depth (MBD2) score for every curve in the matrix.
+
+Functions:
+
+  curveScore(curveData)
+    - PHASE 5
+    - Takes curve matrix X of shape (n, T)
+    - Initializes scores array of n zeros
+    - Uses itertools.combinations to generate every pair (a, b)
+    - For each pair:
+        Forms band: lo = min(X[a], X[b]) at each time point
+                    hi = max(X[a], X[b]) at each time point
+        For every curve i:
+          Computes proportion of time X[i] stays inside [lo, hi]
+          Adds that proportion to scores[i]
+    - After all pairs: divides scores by total_pairs to get average
+    - Prints progress every 200 pairs
+    - Returns scores array of shape (n,)
+    - Highest score = most central = median curve
+
+
+--------------------------------------------------------------------------------
+  FILE: rankCurves.py
+--------------------------------------------------------------------------------
+
+Ranks all curves from most central to most outlying using MBD2 scores.
+
+Functions:
+
+  rankCurve(x, dates, scores)
+    - PHASE 6
+    - Uses np.argsort(scores)[::-1] to sort indices from highest to lowest score
+    - rank_order[0]  = index of median curve (highest score)
+    - rank_order[1]  = index of 2nd deepest curve
+    - rank_order[2]  = index of 3rd deepest curve
+    - rank_order[-5:] = indices of 5 shallowest curves (outliers)
+    - Packs everything into a dictionary called ranked
+    - Dictionary contains: X, dates, scores, rank_order,
+      median_idx, median_date, median_score,
+      deep2_idx, deep2_date, deep2_score,
+      deep3_idx, deep3_date, deep3_score,
+      shallow_idx, shallow_dates, shallow_scores
+    - Returns ranked dictionary
+
+
+--------------------------------------------------------------------------------
+  FILE: visulization.py
+--------------------------------------------------------------------------------
+
+Generates final visualization plots and saves them as PNG files.
+
+Functions:
+
+  visualize(ranked, pollutant, unit, tag, mode)
+    - PHASE 7 for steps 1a, 1b, 2a, 2b
+    - Extracts all data from ranked dictionary
+    - Sets x-axis based on mode:
+        mode "step1": x = hours 0 to 23, labels "00:00" to "22:00"
+        mode "step2a" or "step2b": x = days 1 to 365
+    - Dark background figure (#0e1117)
+    - Plots all curves in grey (alpha=0.30) as background
+    - Plots 5 shallowest curves in red (#ff6b6b)
+    - Plots 3rd deepest in blue (#74b9ff)
+    - Plots 2nd deepest in purple (#a29bfe)
+    - Plots median curve in GREEN (#00e676) with zorder=5 so it appears
+      on top of all other curves
+    - Adds axis labels, title, legend and info text
+    - Saves to outputs/ folder as PNG at 150 DPI
+    - Returns output file path
+
+  visualizeStep3(ranked, tag)
+    - PHASE 7 for Step 3a parametric
+    - Same dark background and color scheme
+    - x axis = NO2 values (not time)
+    - y axis = O3 values
+    - Each curve traces NO2 vs O3 relationship throughout the day
+    - Same color scheme: grey background, red outliers, blue 3rd,
+      purple 2nd, green median
+    - Saves to outputs/ folder as PNG
+
+
+--------------------------------------------------------------------------------
+  PIPELINE FLOW SUMMARY
+--------------------------------------------------------------------------------
+
+Main.py starts
+      |
+      v
+fileManager.checkAndExtract()
+      |
+      |-- loadJson() --> first_time_done?
+      |       YES --> checkFiles() --> all present? --> YES --> return True
+      |                                            --> NO  --> extractFiles()
+      |       NO  --> extractFiles()
+      |
+      |-- extractFiles() --> checkFiles() --> updateJson() --> return True
+      |
+      v
+run_pipeline() called for each step
+      |
+      v
+Phase 1: load_Raw_Data()        - loads raw CSV into DataFrame
+      |
+      v
+Phase 2: cleanRawData()         - filters to Boston, summer, weekdays
+      |
+      v
+Phase 3: dateValidation()       - drops incomplete days or years
+      |
+      v
+Phase 4: curveMatrix()          - builds 2D numpy matrix of curves
+      |
+      v
+Phase 5: curveScore()           - computes MBD2 score for each curve
+      |
+      v
+Phase 6: rankCurve()            - ranks curves, identifies median
+      |
+      v
+Phase 7: visualize()            - generates PNG plot
+      |
+      v
+outputs/ folder
+  hourly_O3_band_depth.png
+  hourly_NO2_band_depth.png
+  yearly_O3_band_depth.png
+  yearly_PM25_band_depth.png
+  step3a_parametric_band_depth.png
+
+
+--------------------------------------------------------------------------------
+  OUTPUT INTERPRETATION
+--------------------------------------------------------------------------------
+
+Each plot shows:
+  GREY curves   = all curves in the dataset (background)
+  RED curves    = shallowest / outlier curves (most unusual)
+  BLUE curve    = 3rd deepest (3rd most typical)
+  PURPLE curve  = 2nd deepest (2nd most typical)
+  GREEN curve   = MEDIAN CURVE (most central / most typical)
+
+Step 1a: Which summer weekday had the most typical O3 hourly pattern?
+Step 1b: Which summer weekday had the most typical NO2 hourly pattern?
+Step 2a: Which year had the most typical O3 yearly pattern?
+Step 2b: Which year had the most typical PM2.5 yearly pattern?
+Step 3a: Which day had the most typical joint NO2 and O3 behavior?
+
+
+--------------------------------------------------------------------------------
+  RESULTS
+--------------------------------------------------------------------------------
+
+Step 1a  Median: 2025-07-23  Score: 0.5355  Curves: 41
+Step 1b  Median: 2025-06-12  Score: 0.5420  Curves: 46
+Step 2a  Median: 2024        Score: 0.5185  Curves: 10
+Step 2b  Median: 2020        Score: 0.5202  Curves: 10
+Step 3a  Median: 2025-06-12  Score: 0.5467  Curves: 41
+
+Total Pipeline Time: ~4 minutes 42 seconds
+
+
+================================================================================
